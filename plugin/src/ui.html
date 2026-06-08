@@ -1,0 +1,370 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body {
+        margin: 0;
+        padding: 14px;
+        font: 12px/1.4 Inter, sans-serif;
+        color: var(--figma-color-text);
+        background: var(--figma-color-bg);
+      }
+
+      .title {
+        font-weight: 600;
+        margin-bottom: 8px;
+      }
+
+      .status {
+        padding: 8px;
+        border: 1px solid var(--figma-color-border);
+        border-radius: 6px;
+        margin-bottom: 10px;
+      }
+
+      .muted {
+        color: var(--figma-color-text-secondary);
+      }
+
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      button {
+        border: 1px solid var(--figma-color-border);
+        border-radius: 6px;
+        padding: 7px 9px;
+        color: var(--figma-color-text);
+        background: var(--figma-color-bg-secondary);
+        cursor: pointer;
+      }
+
+      button.primary {
+        color: var(--figma-color-text-onbrand);
+        background: var(--figma-color-bg-brand);
+        border-color: var(--figma-color-bg-brand);
+      }
+
+      button:disabled {
+        cursor: default;
+        opacity: 0.45;
+      }
+
+      .list-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        margin-top: 14px;
+        margin-bottom: 8px;
+      }
+
+      .list {
+        border: 1px solid var(--figma-color-border);
+        border-radius: 6px;
+        max-height: 285px;
+        overflow: auto;
+      }
+
+      .empty {
+        padding: 12px;
+        color: var(--figma-color-text-secondary);
+      }
+
+      .item {
+        display: grid;
+        grid-template-columns: 18px 1fr;
+        gap: 8px;
+        padding: 9px 10px;
+        border-bottom: 1px solid var(--figma-color-border);
+      }
+
+      .item:last-child {
+        border-bottom: 0;
+      }
+
+      .frame-link {
+        min-width: 0;
+        cursor: pointer;
+      }
+
+      .frame-link:hover .name {
+        text-decoration: underline;
+      }
+
+      .name {
+        font-weight: 500;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .meta {
+        margin-top: 2px;
+        color: var(--figma-color-text-secondary);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      input {
+        margin: 1px 0 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="title">Figma MCP Enhancer</div>
+    <div id="status" class="status">Connecting to local MCP bridge...</div>
+    <div class="muted">Keep this plugin window open while the MCP tools run.</div>
+    <div class="toolbar">
+      <button id="find">Find frames</button>
+      <button id="useSelected" class="primary" disabled>Use selected</button>
+      <button id="next">Next</button>
+    </div>
+    <div class="list-header">
+      <span id="summary" class="muted">No frames loaded</span>
+      <span>
+        <button id="selectAll" disabled>All</button>
+        <button id="clearAll" disabled>Clear</button>
+      </span>
+    </div>
+    <div id="list" class="list">
+      <div class="empty">Click Find frames to list outermost frames on this page.</div>
+    </div>
+
+    <script>
+      const bridgeUrl = "http://localhost:8787";
+      const clientId = Math.random().toString(36).slice(2);
+      const statusEl = document.getElementById("status");
+      const summaryEl = document.getElementById("summary");
+      const listEl = document.getElementById("list");
+      const useSelectedButton = document.getElementById("useSelected");
+      const selectAllButton = document.getElementById("selectAll");
+      const clearAllButton = document.getElementById("clearAll");
+      const pending = new Map();
+      let frames = [];
+      let selectedIds = new Set();
+      let syncTimer = null;
+
+      function setStatus(text) {
+        statusEl.textContent = text;
+      }
+
+      function sendToPlugin(command) {
+        parent.postMessage({ pluginMessage: command }, "*");
+      }
+
+      function sendManualCommand(command, params) {
+        const id = `manual-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        pending.set(id, { id, command, params, source: "manual" });
+        sendToPlugin({
+          type: "bridge-command",
+          id,
+          command,
+          params: params || {}
+        });
+      }
+
+      function updateActions() {
+        const hasFrames = frames.length > 0;
+        useSelectedButton.disabled = selectedIds.size === 0;
+        selectAllButton.disabled = !hasFrames;
+        clearAllButton.disabled = !hasFrames;
+        summaryEl.textContent = hasFrames
+          ? `${frames.length} frames, ${selectedIds.size} selected`
+          : "No frames loaded";
+      }
+
+      function selectedNodeIds() {
+        return frames
+          .filter((frame) => selectedIds.has(frame.id))
+          .map((frame) => frame.id);
+      }
+
+      function syncSelectedQueue() {
+        window.clearTimeout(syncTimer);
+        syncTimer = window.setTimeout(() => {
+          sendManualCommand("setQueue", {
+            nodeIds: selectedNodeIds()
+          });
+        }, 120);
+      }
+
+      function renderList() {
+        if (frames.length === 0) {
+          listEl.innerHTML = '<div class="empty">No outermost frames found on this page.</div>';
+          updateActions();
+          return;
+        }
+
+        listEl.innerHTML = "";
+
+        frames.forEach((frame) => {
+          const item = document.createElement("div");
+          item.className = "item";
+
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.checked = selectedIds.has(frame.id);
+          checkbox.onchange = () => {
+            if (checkbox.checked) {
+              selectedIds.add(frame.id);
+            } else {
+              selectedIds.delete(frame.id);
+            }
+            updateActions();
+            syncSelectedQueue();
+          };
+
+          const content = document.createElement("div");
+          content.className = "frame-link";
+          content.title = "Select this frame in Figma";
+          content.onclick = () => {
+            sendManualCommand("selectFrame", {
+              mode: "nodeId",
+              nodeId: frame.id
+            });
+          };
+
+          const name = document.createElement("div");
+          const meta = document.createElement("div");
+
+          name.className = "name";
+          meta.className = "meta";
+          name.textContent = frame.name;
+          meta.textContent = `${frame.width || 0}x${frame.height || 0} · ${frame.id}`;
+
+          content.appendChild(name);
+          content.appendChild(meta);
+          item.appendChild(checkbox);
+          item.appendChild(content);
+          listEl.appendChild(item);
+        });
+
+        updateActions();
+      }
+
+      function handleManualResult(command, message) {
+        if (!message.ok) {
+          return;
+        }
+
+        if (command === "findAllFrames") {
+          frames = message.result.frames || [];
+          selectedIds = new Set();
+          renderList();
+          setStatus(`Found ${frames.length} outermost frames.`);
+        }
+
+        if (command === "setQueue") {
+          setStatus(`Queued ${message.result.count} selected frames.`);
+        }
+
+        if (command === "selectFrame") {
+          const selected = message.result.selected;
+          setStatus(selected ? `Selected ${selected.name}` : "Selected next frame.");
+        }
+      }
+
+      async function postResult(payload) {
+        await fetch(`${bridgeUrl}/plugin/result`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+      }
+
+      async function poll() {
+        while (true) {
+          try {
+            const response = await fetch(`${bridgeUrl}/plugin/poll?clientId=${clientId}`);
+
+            if (response.status === 204) {
+              setStatus("Connected. Waiting for MCP commands...");
+              continue;
+            }
+
+            if (!response.ok) {
+              throw new Error(`Bridge returned ${response.status}`);
+            }
+
+            const command = await response.json();
+            pending.set(command.id, command);
+            setStatus(`Running ${command.command}...`);
+            sendToPlugin({
+              type: "bridge-command",
+              id: command.id,
+              command: command.command,
+              params: command.params || {}
+            });
+          } catch (error) {
+            setStatus(`Disconnected: ${error.message}`);
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+          }
+        }
+      }
+
+      window.onmessage = async (event) => {
+        const message = event.data.pluginMessage;
+
+        if (!message || message.type !== "bridge-result") {
+          return;
+        }
+
+        const pendingCommand = pending.get(message.id);
+        pending.delete(message.id);
+
+        await postResult(message);
+        setStatus(message.ok ? "Done. Waiting for MCP commands..." : `Error: ${message.error}`);
+
+        if (pendingCommand && pendingCommand.source === "manual") {
+          handleManualResult(pendingCommand.command, message);
+        }
+      };
+
+      document.getElementById("find").onclick = () => {
+        sendManualCommand("findAllFrames", {
+          scope: "currentPage",
+          depth: "outermost",
+          updateQueue: false
+        });
+      };
+
+      useSelectedButton.onclick = () => {
+        sendManualCommand("setQueue", {
+          nodeIds: selectedNodeIds()
+        });
+      };
+
+      document.getElementById("next").onclick = () => {
+        if (selectedIds.size === 0) {
+          setStatus("Select frames before using Next.");
+          return;
+        }
+
+        sendManualCommand("selectFrame", {
+          mode: "next",
+          nodeIds: selectedNodeIds()
+        });
+      };
+
+      selectAllButton.onclick = () => {
+        selectedIds = new Set(frames.map((frame) => frame.id));
+        renderList();
+        syncSelectedQueue();
+      };
+
+      clearAllButton.onclick = () => {
+        selectedIds.clear();
+        renderList();
+        syncSelectedQueue();
+      };
+
+      poll();
+    </script>
+  </body>
+</html>

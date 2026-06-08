@@ -1,0 +1,15 @@
+{
+  "name": "Figma MCP Enhancer",
+  "api": "1.0.0",
+  "main": "src/main.js",
+  "ui": "src/ui.html",
+  "editorType": ["figma", "dev"],
+  "capabilities": ["inspect"],
+  "documentAccess": "dynamic-page",
+  "networkAccess": {
+    "allowedDomains": ["none"],
+    "devAllowedDomains": [
+      "http://localhost:8787"
+    ]
+  }
+}
