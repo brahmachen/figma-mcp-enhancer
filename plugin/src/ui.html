@@ -149,6 +149,7 @@
       let frames = [];
       let selectedIds = new Set();
       let syncTimer = null;
+      const uiStateKey = "figma-mcp-enhancer-ui-state-v1";
 
       function setStatus(text) {
         statusEl.textContent = text;
@@ -179,6 +180,81 @@
           : "No frames loaded";
       }
 
+      function localStatePayload() {
+        return {
+          frames,
+          selectedNodeIds: selectedNodeIds(),
+          updatedAt: new Date().toISOString()
+        };
+      }
+
+      function saveLocalState() {
+        try {
+          localStorage.setItem(uiStateKey, JSON.stringify(localStatePayload()));
+        } catch (_) {}
+      }
+
+      function loadLocalState() {
+        try {
+          const state = JSON.parse(localStorage.getItem(uiStateKey) || "{}");
+          return {
+            frames: Array.isArray(state.frames) ? state.frames : [],
+            selectedNodeIds: Array.isArray(state.selectedNodeIds) ? state.selectedNodeIds : []
+          };
+        } catch (_) {
+          return { frames: [], selectedNodeIds: [] };
+        }
+      }
+
+      function applyState(state, source) {
+        frames = Array.isArray(state.frames) ? state.frames : [];
+        selectedIds = new Set(Array.isArray(state.selectedNodeIds) ? state.selectedNodeIds : []);
+        renderList();
+
+        if (frames.length > 0) {
+          setStatus(`Restored ${frames.length} frames, ${selectedIds.size} selected from ${source}.`);
+        }
+      }
+
+      async function persistUiState() {
+        saveLocalState();
+        await fetch(`${bridgeUrl}/ui/state`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(localStatePayload())
+        });
+      }
+
+      async function restoreUiState() {
+        const localState = loadLocalState();
+        if (localState.frames.length > 0) {
+          applyState(localState, "local cache");
+        }
+
+        try {
+          const response = await fetch(`${bridgeUrl}/ui/state`);
+          if (!response.ok) {
+            return;
+          }
+
+          const payload = await response.json();
+          const state = payload.state || {};
+
+          if (Array.isArray(state.frames) && state.frames.length > 0) {
+            applyState(state, "bridge state");
+            saveLocalState();
+            syncSelectedQueue();
+          } else if (localState.frames.length > 0) {
+            await persistUiState();
+            syncSelectedQueue();
+          }
+        } catch (error) {
+          if (localState.frames.length === 0) {
+            setStatus(`State restore failed: ${error.message}`);
+          }
+        }
+      }
+
       function selectedNodeIds() {
         return frames
           .filter((frame) => selectedIds.has(frame.id))
@@ -187,7 +263,10 @@
 
       function syncSelectedQueue() {
         window.clearTimeout(syncTimer);
-        syncTimer = window.setTimeout(() => {
+        syncTimer = window.setTimeout(async () => {
+          try {
+            await persistUiState();
+          } catch (_) {}
           sendManualCommand("setQueue", {
             nodeIds: selectedNodeIds()
           });
@@ -248,7 +327,7 @@
         updateActions();
       }
 
-      function handleManualResult(command, message) {
+      async function handleManualResult(command, message) {
         if (!message.ok) {
           return;
         }
@@ -257,6 +336,10 @@
           frames = message.result.frames || [];
           selectedIds = new Set();
           renderList();
+          saveLocalState();
+          try {
+            await persistUiState();
+          } catch (_) {}
           setStatus(`Found ${frames.length} outermost frames.`);
         }
 
@@ -322,7 +405,7 @@
         setStatus(message.ok ? "Done. Waiting for MCP commands..." : `Error: ${message.error}`);
 
         if (pendingCommand && pendingCommand.source === "manual") {
-          handleManualResult(pendingCommand.command, message);
+          await handleManualResult(pendingCommand.command, message);
         }
       };
 
@@ -335,9 +418,7 @@
       };
 
       useSelectedButton.onclick = () => {
-        sendManualCommand("setQueue", {
-          nodeIds: selectedNodeIds()
-        });
+        syncSelectedQueue();
       };
 
       document.getElementById("next").onclick = () => {
@@ -364,6 +445,8 @@
         syncSelectedQueue();
       };
 
+      restoreUiState();
+      window.setTimeout(restoreUiState, 800);
       poll();
     </script>
   </body>

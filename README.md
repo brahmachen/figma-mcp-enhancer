@@ -88,6 +88,8 @@ Figma MCP Enhancer bridge listening on http://localhost:8787
 - `All`：全选当前列表。
 - `Clear`：清空当前选择。
 
+插件会把当前页面的 Frame 列表和勾选队列保存到本地状态文件中，默认路径是系统临时目录下的 `figma-mcp-enhancer-state.json`。Dev Mode 右侧面板切换到 Inspect 再切回来时，UI 可能会被 Figma 重建，但插件会自动恢复上一次的列表和勾选状态。
+
 ## MCP 工具用法
 
 ### `figma_find_all_frames`
@@ -204,3 +206,4 @@ Figma MCP Enhancer bridge listening on http://localhost:8787
 - 默认使用 `scope: "currentPage"` + `depth: "outermost"` 扫描页面最外层 Frame，适合“逐个实现页面级 Frame”的场景。
 - 如果 Figma 文件很大，可以使用 `scope: "selection"` + `depth: "direct"`，先选中一个父级容器，再只扫描它下面的直接子 Frame。
 - 这个项目适合和官方 Figma MCP 一起使用：本项目负责批处理选中，官方 MCP 负责读取设计上下文和截图。
+- 不需要 publish 才能保留切 tab 前的勾选状态；当前实现通过本地 bridge 的状态文件保存 UI 状态。可以通过环境变量 `FIGMA_ENHANCER_STATE_FILE` 指定状态文件路径。

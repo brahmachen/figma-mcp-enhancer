@@ -1,17 +1,55 @@
 #!/usr/bin/env node
 
 const http = require("http");
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
 const { URL } = require("url");
 const readline = require("readline");
 
 const PORT = Number(process.env.FIGMA_ENHANCER_PORT || 8787);
 const REQUEST_TIMEOUT_MS = Number(process.env.FIGMA_ENHANCER_TIMEOUT_MS || 30000);
+const STATE_FILE = process.env.FIGMA_ENHANCER_STATE_FILE || path.join(os.tmpdir(), "figma-mcp-enhancer-state.json");
 
 let nextCommandId = 1;
 const commandQueue = [];
 const pollWaiters = [];
 const resultWaiters = new Map();
 let pluginLastSeenAt = 0;
+let uiState = {
+  frames: [],
+  selectedNodeIds: [],
+  queueIndex: -1,
+  updatedAt: null
+};
+
+function normalizeUiState(state) {
+  return {
+    frames: Array.isArray(state && state.frames) ? state.frames : [],
+    selectedNodeIds: Array.isArray(state && state.selectedNodeIds) ? state.selectedNodeIds : [],
+    queueIndex: Number.isFinite(state && state.queueIndex) ? state.queueIndex : -1,
+    updatedAt: state && typeof state.updatedAt === "string" ? state.updatedAt : null
+  };
+}
+
+function loadUiState() {
+  try {
+    uiState = normalizeUiState(JSON.parse(fs.readFileSync(STATE_FILE, "utf8")));
+  } catch (_) {
+    uiState = normalizeUiState(uiState);
+  }
+}
+
+function saveUiState(nextState) {
+  uiState = normalizeUiState({
+    ...nextState,
+    updatedAt: new Date().toISOString()
+  });
+  fs.writeFileSync(STATE_FILE, JSON.stringify(uiState, null, 2));
+  return uiState;
+}
+
+loadUiState();
 
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -83,11 +121,39 @@ const bridgeServer = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
 
     if (req.method === "GET" && url.pathname === "/health") {
+      loadUiState();
       sendJson(res, 200, {
         ok: true,
         pluginConnected: Date.now() - pluginLastSeenAt < 10000,
-        queuedCommands: commandQueue.length
+        queuedCommands: commandQueue.length,
+        stateFile: STATE_FILE,
+        stateFrameCount: uiState.frames.length,
+        stateSelectedCount: uiState.selectedNodeIds.length
       });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/ui/state") {
+      loadUiState();
+      sendJson(res, 200, {
+        ok: true,
+        state: uiState
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/ui/state") {
+      const body = await readJsonBody(req);
+      const incomingFrames = Array.isArray(body.frames) ? body.frames : [];
+      const frames = incomingFrames.length === 0 && uiState.frames.length > 0 && body.allowEmptyFrames !== true
+        ? uiState.frames
+        : incomingFrames;
+      const state = saveUiState({
+        frames,
+        selectedNodeIds: Array.isArray(body.selectedNodeIds) ? body.selectedNodeIds : [],
+        queueIndex: Number.isFinite(body.queueIndex) ? body.queueIndex : -1
+      });
+      sendJson(res, 200, { ok: true, state });
       return;
     }
 
@@ -143,7 +209,19 @@ const bridgeServer = http.createServer(async (req, res) => {
   }
 });
 
+let bridgeStarted = false;
+
+bridgeServer.on("error", (error) => {
+  if (error && error.code === "EADDRINUSE") {
+    console.error(`Figma MCP Enhancer bridge already running on http://localhost:${PORT}; reusing it for MCP calls.`);
+    return;
+  }
+
+  console.error(`Figma MCP Enhancer bridge error: ${error && error.message ? error.message : String(error)}`);
+});
+
 bridgeServer.listen(PORT, () => {
+  bridgeStarted = true;
   console.error(`Figma MCP Enhancer bridge listening on http://localhost:${PORT}`);
 });
 
@@ -307,13 +385,25 @@ rl.on("line", (line) => {
 });
 
 rl.on("close", () => {
-  bridgeServer.close(() => process.exit(0));
+  if (bridgeStarted) {
+    bridgeServer.close(() => process.exit(0));
+  } else {
+    process.exit(0);
+  }
 });
 
 process.on("SIGINT", () => {
-  bridgeServer.close(() => process.exit(0));
+  if (bridgeStarted) {
+    bridgeServer.close(() => process.exit(0));
+  } else {
+    process.exit(0);
+  }
 });
 
 process.on("SIGTERM", () => {
-  bridgeServer.close(() => process.exit(0));
+  if (bridgeStarted) {
+    bridgeServer.close(() => process.exit(0));
+  } else {
+    process.exit(0);
+  }
 });

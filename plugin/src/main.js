@@ -281,6 +281,7 @@ async function selectFrame(params) {
 async function setQueue(params) {
   const nodeIds = Array.isArray(params.nodeIds) ? params.nodeIds : [];
   const nodes = [];
+  const previousQueueIndex = queueIndex;
 
   for (const nodeId of nodeIds) {
     const node = await getNodeById(nodeId);
@@ -290,7 +291,7 @@ async function setQueue(params) {
   }
 
   frameQueue = nodes;
-  queueIndex = -1;
+  queueIndex = params && params.preserveIndex ? previousQueueIndex : -1;
   queueSignature = nodeIds.join(",");
 
   return {
