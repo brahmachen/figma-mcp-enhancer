@@ -10,6 +10,7 @@ const readline = require("readline");
 const PORT = Number(process.env.FIGMA_ENHANCER_PORT || 8787);
 const REQUEST_TIMEOUT_MS = Number(process.env.FIGMA_ENHANCER_TIMEOUT_MS || 30000);
 const STATE_FILE = process.env.FIGMA_ENHANCER_STATE_FILE || path.join(os.tmpdir(), "figma-mcp-enhancer-state.json");
+const BRIDGE_BASE_URL = `http://127.0.0.1:${PORT}`;
 
 let nextCommandId = 1;
 const commandQueue = [];
@@ -22,6 +23,13 @@ let uiState = {
   queueIndex: -1,
   updatedAt: null
 };
+
+let bridgeStarted = false;
+let bridgeReuse = false;
+let resolveBridgeReady;
+const bridgeReady = new Promise((resolve) => {
+  resolveBridgeReady = resolve;
+});
 
 function normalizeUiState(state) {
   return {
@@ -82,6 +90,57 @@ function sendJson(res, statusCode, payload) {
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS"
   });
   res.end(JSON.stringify(payload));
+}
+
+function postBridgeJson(pathname, payload) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify(payload || {});
+    const req = http.request(
+      `${BRIDGE_BASE_URL}${pathname}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(body)
+        },
+        timeout: REQUEST_TIMEOUT_MS + 1000
+      },
+      (res) => {
+        let responseBody = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => {
+          responseBody += chunk;
+        });
+        res.on("end", () => {
+          let payload;
+          try {
+            payload = responseBody ? JSON.parse(responseBody) : {};
+          } catch (error) {
+            reject(new Error(`Bridge returned invalid JSON: ${error.message}`));
+            return;
+          }
+
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            resolve(payload);
+            return;
+          }
+
+          reject(new Error(payload.error || `Bridge returned HTTP ${res.statusCode}`));
+        });
+      }
+    );
+
+    req.on("timeout", () => {
+      req.destroy(new Error("Timed out waiting for the shared Figma MCP Enhancer bridge."));
+    });
+    req.on("error", reject);
+    req.end(body);
+  });
+}
+
+async function shouldUseSharedBridge() {
+  await bridgeReady;
+  return bridgeReuse && !bridgeStarted;
 }
 
 function dispatchCommand(command) {
@@ -203,25 +262,38 @@ const bridgeServer = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/mcp/call") {
+      const body = await readJsonBody(req);
+      if (body.command !== "findAllFrames" && body.command !== "selectFrame") {
+        sendJson(res, 400, { ok: false, error: `Unsupported bridge command: ${body.command}` });
+        return;
+      }
+      const result = await requestPlugin(body.command, body.params || {});
+      sendJson(res, 200, { ok: true, result });
+      return;
+    }
+
     sendJson(res, 404, { error: "Not found" });
   } catch (error) {
-    sendJson(res, 500, { error: error.message || String(error) });
+    sendJson(res, 500, { ok: false, error: error.message || String(error) });
   }
 });
 
-let bridgeStarted = false;
-
 bridgeServer.on("error", (error) => {
   if (error && error.code === "EADDRINUSE") {
+    bridgeReuse = true;
+    resolveBridgeReady();
     console.error(`Figma MCP Enhancer bridge already running on http://localhost:${PORT}; reusing it for MCP calls.`);
     return;
   }
 
+  resolveBridgeReady();
   console.error(`Figma MCP Enhancer bridge error: ${error && error.message ? error.message : String(error)}`);
 });
 
-bridgeServer.listen(PORT, () => {
+bridgeServer.listen(PORT, "127.0.0.1", () => {
   bridgeStarted = true;
+  resolveBridgeReady();
   console.error(`Figma MCP Enhancer bridge listening on http://localhost:${PORT}`);
 });
 
@@ -284,7 +356,9 @@ function toolDefinitions() {
 
 async function callTool(name, args) {
   if (name === "figma_find_all_frames") {
-    const result = await requestPlugin("findAllFrames", args || {});
+    const result = await shouldUseSharedBridge()
+      ? (await postBridgeJson("/mcp/call", { command: "findAllFrames", params: args || {} })).result
+      : await requestPlugin("findAllFrames", args || {});
     return {
       content: [
         {
@@ -296,7 +370,9 @@ async function callTool(name, args) {
   }
 
   if (name === "figma_select_frame") {
-    const result = await requestPlugin("selectFrame", args || {});
+    const result = await shouldUseSharedBridge()
+      ? (await postBridgeJson("/mcp/call", { command: "selectFrame", params: args || {} })).result
+      : await requestPlugin("selectFrame", args || {});
     return {
       content: [
         {
