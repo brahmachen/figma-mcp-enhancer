@@ -149,7 +149,8 @@
       let frames = [];
       let selectedIds = new Set();
       let syncTimer = null;
-      const uiStateKey = "figma-mcp-enhancer-ui-state-v1";
+      let currentContext = null;
+      const uiStateKeyPrefix = "figma-mcp-enhancer-ui-state-v2";
 
       function setStatus(text) {
         statusEl.textContent = text;
@@ -170,6 +171,38 @@
         });
       }
 
+      function requestPluginCommand(command, params) {
+        return new Promise((resolve, reject) => {
+          const id = `internal-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          const timeout = window.setTimeout(() => {
+            pending.delete(id);
+            reject(new Error(`${command} timed out`));
+          }, 5000);
+
+          pending.set(id, { id, command, params, source: "internal", resolve, reject, timeout });
+          sendToPlugin({
+            type: "bridge-command",
+            id,
+            command,
+            params: params || {}
+          });
+        });
+      }
+
+      function contextScopeKey(context) {
+        const filePart = context && (context.fileKey || context.rootName) ? context.fileKey || context.rootName : "unknown-file";
+        const pagePart = context && (context.pageId || context.pageName) ? context.pageId || context.pageName : "unknown-page";
+        return `${filePart}::${pagePart}`;
+      }
+
+      function currentScopeKey() {
+        return contextScopeKey(currentContext);
+      }
+
+      function uiStateKey() {
+        return `${uiStateKeyPrefix}:${currentScopeKey()}`;
+      }
+
       function updateActions() {
         const hasFrames = frames.length > 0;
         useSelectedButton.disabled = selectedIds.size === 0;
@@ -182,6 +215,8 @@
 
       function localStatePayload() {
         return {
+          scopeKey: currentScopeKey(),
+          context: currentContext,
           frames,
           selectedNodeIds: selectedNodeIds(),
           updatedAt: new Date().toISOString()
@@ -190,13 +225,16 @@
 
       function saveLocalState() {
         try {
-          localStorage.setItem(uiStateKey, JSON.stringify(localStatePayload()));
+          localStorage.setItem(uiStateKey(), JSON.stringify(localStatePayload()));
         } catch (_) {}
       }
 
       function loadLocalState() {
         try {
-          const state = JSON.parse(localStorage.getItem(uiStateKey) || "{}");
+          const state = JSON.parse(localStorage.getItem(uiStateKey()) || "{}");
+          if (state.scopeKey && state.scopeKey !== currentScopeKey()) {
+            return { frames: [], selectedNodeIds: [] };
+          }
           return {
             frames: Array.isArray(state.frames) ? state.frames : [],
             selectedNodeIds: Array.isArray(state.selectedNodeIds) ? state.selectedNodeIds : []
@@ -207,6 +245,10 @@
       }
 
       function applyState(state, source) {
+        if (state.scopeKey && state.scopeKey !== currentScopeKey()) {
+          return false;
+        }
+
         frames = Array.isArray(state.frames) ? state.frames : [];
         selectedIds = new Set(Array.isArray(state.selectedNodeIds) ? state.selectedNodeIds : []);
         renderList();
@@ -214,6 +256,8 @@
         if (frames.length > 0) {
           setStatus(`Restored ${frames.length} frames, ${selectedIds.size} selected from ${source}.`);
         }
+
+        return true;
       }
 
       async function persistUiState() {
@@ -232,7 +276,7 @@
         }
 
         try {
-          const response = await fetch(`${bridgeUrl}/ui/state`);
+          const response = await fetch(`${bridgeUrl}/ui/state?scopeKey=${encodeURIComponent(currentScopeKey())}`);
           if (!response.ok) {
             return;
           }
@@ -253,6 +297,27 @@
             setStatus(`State restore failed: ${error.message}`);
           }
         }
+      }
+
+      async function refreshContext() {
+        const context = await requestPluginCommand("getContext", {});
+        currentContext = context || null;
+        return currentContext;
+      }
+
+      async function switchContext(context, source) {
+        const previousScopeKey = currentScopeKey();
+        currentContext = context || null;
+
+        if (currentScopeKey() === previousScopeKey) {
+          return;
+        }
+
+        frames = [];
+        selectedIds.clear();
+        renderList();
+        setStatus(`Switched to ${currentContext && currentContext.pageName ? currentContext.pageName : "current page"}.`);
+        await restoreUiState();
       }
 
       function selectedNodeIds() {
@@ -394,12 +459,34 @@
       window.onmessage = async (event) => {
         const message = event.data.pluginMessage;
 
-        if (!message || message.type !== "bridge-result") {
+        if (!message) {
+          return;
+        }
+
+        if (message.type === "context-changed") {
+          await switchContext(message.context, "Figma");
+          return;
+        }
+
+        if (message.type !== "bridge-result") {
           return;
         }
 
         const pendingCommand = pending.get(message.id);
         pending.delete(message.id);
+
+        if (pendingCommand && pendingCommand.timeout) {
+          window.clearTimeout(pendingCommand.timeout);
+        }
+
+        if (pendingCommand && pendingCommand.source === "internal") {
+          if (message.ok) {
+            pendingCommand.resolve(message.result);
+          } else {
+            pendingCommand.reject(new Error(message.error || "Plugin command failed"));
+          }
+          return;
+        }
 
         await postResult(message);
         setStatus(message.ok ? "Done. Waiting for MCP commands..." : `Error: ${message.error}`);
@@ -445,9 +532,22 @@
         syncSelectedQueue();
       };
 
-      restoreUiState();
-      window.setTimeout(restoreUiState, 800);
-      poll();
+      async function initialize() {
+        try {
+          await refreshContext();
+          await restoreUiState();
+          window.setTimeout(async () => {
+            await refreshContext();
+            await restoreUiState();
+          }, 800);
+        } catch (error) {
+          setStatus(`Context restore failed: ${error.message}`);
+        }
+
+        poll();
+      }
+
+      initialize();
     </script>
   </body>
 </html>

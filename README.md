@@ -88,7 +88,7 @@ Figma MCP Enhancer bridge listening on http://localhost:8787
 - `All`：全选当前列表。
 - `Clear`：清空当前选择。
 
-插件会把当前页面的 Frame 列表和勾选队列保存到本地状态文件中，默认路径是系统临时目录下的 `figma-mcp-enhancer-state.json`。Dev Mode 右侧面板切换到 Inspect 再切回来时，UI 可能会被 Figma 重建，但插件会自动恢复上一次的列表和勾选状态。
+插件会把当前页面的 Frame 列表和勾选队列保存到本地状态文件中，默认路径是系统临时目录下的 `figma-mcp-enhancer-state.json`。状态会按 Figma 文件和页面隔离，切换项目或页面时不会恢复另一个项目里的 Frame 列表。Dev Mode 右侧面板切换到 Inspect 再切回来时，UI 可能会被 Figma 重建，但插件会自动恢复当前文件、当前页面上一次的列表和勾选状态。
 
 ## MCP 工具用法
 

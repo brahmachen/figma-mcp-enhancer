@@ -17,12 +17,16 @@ const commandQueue = [];
 const pollWaiters = [];
 const resultWaiters = new Map();
 let pluginLastSeenAt = 0;
-let uiState = {
+const emptyUiState = () => ({
   frames: [],
   selectedNodeIds: [],
   queueIndex: -1,
+  scopeKey: null,
+  context: null,
   updatedAt: null
-};
+});
+let uiState = emptyUiState();
+let uiStateStore = { version: 2, states: {} };
 
 let bridgeStarted = false;
 let bridgeReuse = false;
@@ -36,23 +40,53 @@ function normalizeUiState(state) {
     frames: Array.isArray(state && state.frames) ? state.frames : [],
     selectedNodeIds: Array.isArray(state && state.selectedNodeIds) ? state.selectedNodeIds : [],
     queueIndex: Number.isFinite(state && state.queueIndex) ? state.queueIndex : -1,
+    scopeKey: state && typeof state.scopeKey === "string" ? state.scopeKey : null,
+    context: state && state.context && typeof state.context === "object" ? state.context : null,
     updatedAt: state && typeof state.updatedAt === "string" ? state.updatedAt : null
   };
 }
 
 function loadUiState() {
   try {
-    uiState = normalizeUiState(JSON.parse(fs.readFileSync(STATE_FILE, "utf8")));
+    const raw = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+    if (raw && raw.version === 2 && raw.states && typeof raw.states === "object") {
+      uiStateStore = { version: 2, states: {} };
+      for (const [scopeKey, state] of Object.entries(raw.states)) {
+        uiStateStore.states[scopeKey] = normalizeUiState({ ...state, scopeKey });
+      }
+      uiState = emptyUiState();
+    } else {
+      uiState = normalizeUiState(raw);
+      uiStateStore = { version: 2, states: {} };
+    }
   } catch (_) {
     uiState = normalizeUiState(uiState);
   }
 }
 
-function saveUiState(nextState) {
-  uiState = normalizeUiState({
+function getUiState(scopeKey) {
+  loadUiState();
+  if (scopeKey) {
+    return uiStateStore.states[scopeKey] || normalizeUiState({ scopeKey });
+  }
+
+  return uiState;
+}
+
+function saveUiState(scopeKey, nextState) {
+  const state = normalizeUiState({
     ...nextState,
+    scopeKey: scopeKey || nextState.scopeKey || null,
     updatedAt: new Date().toISOString()
   });
+
+  if (scopeKey) {
+    uiStateStore.states[scopeKey] = state;
+    fs.writeFileSync(STATE_FILE, JSON.stringify(uiStateStore, null, 2));
+    return state;
+  }
+
+  uiState = state;
   fs.writeFileSync(STATE_FILE, JSON.stringify(uiState, null, 2));
   return uiState;
 }
@@ -181,36 +215,45 @@ const bridgeServer = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/health") {
       loadUiState();
+      const scopedStates = Object.keys(uiStateStore.states);
       sendJson(res, 200, {
         ok: true,
         pluginConnected: Date.now() - pluginLastSeenAt < 10000,
         queuedCommands: commandQueue.length,
         stateFile: STATE_FILE,
-        stateFrameCount: uiState.frames.length,
-        stateSelectedCount: uiState.selectedNodeIds.length
+        stateScopes: scopedStates.length,
+        stateFrameCount: scopedStates.length > 0
+          ? scopedStates.reduce((sum, scopeKey) => sum + uiStateStore.states[scopeKey].frames.length, 0)
+          : uiState.frames.length,
+        stateSelectedCount: scopedStates.length > 0
+          ? scopedStates.reduce((sum, scopeKey) => sum + uiStateStore.states[scopeKey].selectedNodeIds.length, 0)
+          : uiState.selectedNodeIds.length
       });
       return;
     }
 
     if (req.method === "GET" && url.pathname === "/ui/state") {
-      loadUiState();
+      const scopeKey = url.searchParams.get("scopeKey") || "";
       sendJson(res, 200, {
         ok: true,
-        state: uiState
+        state: getUiState(scopeKey)
       });
       return;
     }
 
     if (req.method === "POST" && url.pathname === "/ui/state") {
       const body = await readJsonBody(req);
+      const scopeKey = typeof body.scopeKey === "string" ? body.scopeKey : "";
+      const previousState = getUiState(scopeKey);
       const incomingFrames = Array.isArray(body.frames) ? body.frames : [];
-      const frames = incomingFrames.length === 0 && uiState.frames.length > 0 && body.allowEmptyFrames !== true
-        ? uiState.frames
+      const frames = incomingFrames.length === 0 && previousState.frames.length > 0 && body.allowEmptyFrames !== true
+        ? previousState.frames
         : incomingFrames;
-      const state = saveUiState({
+      const state = saveUiState(scopeKey, {
         frames,
         selectedNodeIds: Array.isArray(body.selectedNodeIds) ? body.selectedNodeIds : [],
-        queueIndex: Number.isFinite(body.queueIndex) ? body.queueIndex : -1
+        queueIndex: Number.isFinite(body.queueIndex) ? body.queueIndex : -1,
+        context: body.context && typeof body.context === "object" ? body.context : null
       });
       sendJson(res, 200, { ok: true, state });
       return;

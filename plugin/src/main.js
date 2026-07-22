@@ -85,6 +85,8 @@ function summarizeFrame(node, index) {
     id: node.id,
     name: node.name,
     type: node.type,
+    fileKey: typeof figma.fileKey === "string" ? figma.fileKey : null,
+    pageId: figma.currentPage.id,
     pageName: figma.currentPage.name,
     parentId: parent && parent.type !== "DOCUMENT" ? parent.id : null,
     parentName: parent && parent.type !== "DOCUMENT" ? parent.name : null,
@@ -100,6 +102,21 @@ function summarizeFrame(node, index) {
     textSnippets,
     description: `${node.name} | ${node.type} | ${bounds.width || 0}x${bounds.height || 0} | children: ${childCount} | layout: ${layoutMode}`
   };
+}
+
+function getContext() {
+  return {
+    fileKey: typeof figma.fileKey === "string" ? figma.fileKey : null,
+    rootName: figma.root && figma.root.name ? figma.root.name : null,
+    pageId: figma.currentPage.id,
+    pageName: figma.currentPage.name
+  };
+}
+
+function resetQueue() {
+  frameQueue = [];
+  queueIndex = -1;
+  queueSignature = "";
 }
 
 function getSearchRoots(scope) {
@@ -308,7 +325,9 @@ figma.ui.onmessage = async (message) => {
   try {
     let result;
 
-    if (message.command === "findAllFrames") {
+    if (message.command === "getContext") {
+      result = getContext();
+    } else if (message.command === "findAllFrames") {
       result = findAllFrames(message.params || {});
     } else if (message.command === "selectFrame") {
       result = await selectFrame(message.params || {});
@@ -333,3 +352,13 @@ figma.ui.onmessage = async (message) => {
     });
   }
 };
+
+if (typeof figma.on === "function") {
+  figma.on("currentpagechange", () => {
+    resetQueue();
+    figma.ui.postMessage({
+      type: "context-changed",
+      context: getContext()
+    });
+  });
+}
