@@ -114,6 +114,22 @@
       input {
         margin: 1px 0 0;
       }
+
+      .search {
+        width: 100%;
+        box-sizing: border-box;
+        margin-top: 12px;
+        padding: 7px 9px;
+        border: 1px solid var(--figma-color-border);
+        border-radius: 6px;
+        color: var(--figma-color-text);
+        background: var(--figma-color-bg-secondary);
+      }
+
+      .item.active {
+        background: var(--figma-color-bg-selected);
+        box-shadow: inset 3px 0 0 var(--figma-color-border-selected);
+      }
     </style>
   </head>
   <body>
@@ -125,6 +141,7 @@
       <button id="useSelected" class="primary" disabled>Use selected</button>
       <button id="next">Next</button>
     </div>
+    <input id="search" class="search" type="search" placeholder="Search frames" aria-label="Search frames" />
     <div class="list-header">
       <span id="summary" class="muted">No frames loaded</span>
       <span>
@@ -150,6 +167,8 @@
       let selectedIds = new Set();
       let syncTimer = null;
       let currentContext = null;
+      let canvasSelectedId = null;
+      let searchQuery = "";
       const uiStateKeyPrefix = "figma-mcp-enhancer-ui-state-v2";
 
       function setStatus(text) {
@@ -211,6 +230,12 @@
         summaryEl.textContent = hasFrames
           ? `${frames.length} frames, ${selectedIds.size} selected`
           : "No frames loaded";
+      }
+
+      function visibleFrames() {
+        const query = searchQuery.trim().toLowerCase();
+        if (!query) return frames;
+        return frames.filter((frame) => `${frame.name || ""} ${frame.id || ""} ${frame.description || ""}`.toLowerCase().includes(query));
       }
 
       function localStatePayload() {
@@ -346,10 +371,18 @@
         }
 
         listEl.innerHTML = "";
+        const displayedFrames = visibleFrames();
+        if (displayedFrames.length === 0) {
+          listEl.innerHTML = '<div class="empty">No matching frames.</div>';
+          updateActions();
+          return;
+        }
 
-        frames.forEach((frame) => {
+        displayedFrames.forEach((frame) => {
           const item = document.createElement("div");
           item.className = "item";
+          item.dataset.nodeId = frame.id;
+          if (frame.id === canvasSelectedId) item.classList.add("active");
 
           const checkbox = document.createElement("input");
           checkbox.type = "checkbox";
@@ -390,6 +423,10 @@
         });
 
         updateActions();
+        if (canvasSelectedId) {
+          const activeItem = listEl.querySelector(`[data-node-id="${CSS.escape(canvasSelectedId)}"]`);
+          if (activeItem) activeItem.scrollIntoView({ block: "nearest" });
+        }
       }
 
       async function handleManualResult(command, message) {
@@ -468,6 +505,12 @@
           return;
         }
 
+        if (message.type === "selection-changed") {
+          canvasSelectedId = message.nodeId;
+          renderList();
+          return;
+        }
+
         if (message.type !== "bridge-result") {
           return;
         }
@@ -518,6 +561,11 @@
           mode: "next",
           nodeIds: selectedNodeIds()
         });
+      };
+
+      document.getElementById("search").oninput = (event) => {
+        searchQuery = event.target.value;
+        renderList();
       };
 
       selectAllButton.onclick = () => {

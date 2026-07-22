@@ -361,4 +361,12 @@ if (typeof figma.on === "function") {
       context: getContext()
     });
   });
+
+  figma.on("selectionchange", () => {
+    const selected = figma.currentPage.selection[0];
+    figma.ui.postMessage({
+      type: "selection-changed",
+      nodeId: selected && isFrameLike(selected) ? selected.id : null
+    });
+  });
 }
