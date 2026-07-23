@@ -1,6 +1,6 @@
 # Figma MCP Enhancer
 
-这是一个用于增强 Figma MCP 批处理能力的 companion MCP server + Figma 插件桥接。
+这是一个用于增强 Figma 批处理能力的 CLI + Skill + Figma 插件桥接，同时保留 companion MCP server 兼容入口。
 
 它新增两个 MCP 工具：
 
@@ -17,6 +17,28 @@
 - `mcp/server.js`：stdio MCP server，同时启动本地 HTTP bridge。
 
 ## 启动方式
+
+### 推荐：CLI + Skill
+
+在项目目录安装 CLI：
+
+```bash
+npm link
+```
+
+保持 Figma 插件窗口打开，然后直接运行：
+
+```bash
+figma-enhancer health
+figma-enhancer frames --scope queue
+figma-enhancer select --node-id "123:456"
+```
+
+CLI 会在调用期间临时启动本地 bridge，命令完成后退出，不需要配置或保持 MCP server 常驻。如果 `8787` 端口上已有兼容 bridge，CLI 会自动复用。
+
+仓库内提供 `skills/figma-enhancer` Skill，可链接到 Codex 的 skills 目录后使用。
+
+### 兼容：MCP server
 
 1. 在 MCP 客户端中配置这个 server。
 

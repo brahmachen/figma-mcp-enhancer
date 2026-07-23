@@ -1,0 +1,4 @@
+interface:
+  display_name: "Figma Enhancer"
+  short_description: "List and select Figma frames through the local CLI"
+  default_prompt: "Use $figma-enhancer to inspect the queued Figma frames and select the next design frame."

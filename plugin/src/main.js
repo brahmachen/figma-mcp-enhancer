@@ -1,6 +1,7 @@
 figma.showUI(__html__, { width: 420, height: 520, themeColors: true });
 
-let frameQueue = [];
+let selectedQueue = [];
+let navigationQueue = [];
 let queueIndex = -1;
 let queueSignature = "";
 
@@ -114,7 +115,8 @@ function getContext() {
 }
 
 function resetQueue() {
-  frameQueue = [];
+  selectedQueue = [];
+  navigationQueue = [];
   queueIndex = -1;
   queueSignature = "";
 }
@@ -176,8 +178,8 @@ function findAllFrames(params) {
       scope: "queue",
       depth: "selected",
       pageName: figma.currentPage.name,
-      count: frameQueue.length,
-      frames: frameQueue.map((node, index) => summarizeFrame(node, index))
+      count: selectedQueue.length,
+      frames: selectedQueue.map((node, index) => summarizeFrame(node, index))
     };
   }
 
@@ -207,7 +209,7 @@ function findAllFrames(params) {
   });
 
   if (!params || params.updateQueue !== false) {
-    frameQueue = nodes;
+    navigationQueue = nodes;
     queueIndex = -1;
     queueSignature = nodes.map((node) => node.id).join(",");
   }
@@ -239,7 +241,7 @@ async function selectFrame(params) {
 
   if (mode === "nodeId") {
     target = await getNodeById(params.nodeId);
-    const existingIndex = frameQueue.findIndex((node) => node.id === params.nodeId);
+    const existingIndex = navigationQueue.findIndex((node) => node.id === params.nodeId);
     if (existingIndex >= 0) {
       queueIndex = existingIndex;
     }
@@ -247,17 +249,17 @@ async function selectFrame(params) {
     if (Array.isArray(params.nodeIds)) {
       const nextSignature = params.nodeIds.join(",");
       if (nextSignature !== queueSignature) {
-        await setQueue({ nodeIds: params.nodeIds });
+        await setNavigationQueue(params.nodeIds);
       }
     }
 
-    if (frameQueue.length === 0) {
+    if (navigationQueue.length === 0) {
       findAllFrames({ scope: "currentPage" });
     }
 
     const current = figma.currentPage.selection[0];
     const currentQueueIndex = current
-      ? frameQueue.findIndex((node) => node.id === current.id)
+      ? navigationQueue.findIndex((node) => node.id === current.id)
       : -1;
 
     if (currentQueueIndex >= 0) {
@@ -274,7 +276,7 @@ async function selectFrame(params) {
       queueIndex = 0;
     }
 
-    target = frameQueue[queueIndex] || null;
+    target = navigationQueue[queueIndex] || null;
   }
 
   if (!target || !isFrameLike(target)) {
@@ -290,15 +292,13 @@ async function selectFrame(params) {
   return {
     selected: summary,
     queueIndex,
-    queueCount: frameQueue.length,
-    hasNext: queueIndex >= 0 && queueIndex < frameQueue.length - 1
+    queueCount: navigationQueue.length,
+    hasNext: queueIndex >= 0 && queueIndex < navigationQueue.length - 1
   };
 }
 
-async function setQueue(params) {
-  const nodeIds = Array.isArray(params.nodeIds) ? params.nodeIds : [];
+async function resolveFrameNodes(nodeIds) {
   const nodes = [];
-  const previousQueueIndex = queueIndex;
 
   for (const nodeId of nodeIds) {
     const node = await getNodeById(nodeId);
@@ -307,13 +307,24 @@ async function setQueue(params) {
     }
   }
 
-  frameQueue = nodes;
-  queueIndex = params && params.preserveIndex ? previousQueueIndex : -1;
+  return nodes;
+}
+
+async function setNavigationQueue(nodeIds, preserveIndex = false) {
+  const previousQueueIndex = queueIndex;
+  navigationQueue = await resolveFrameNodes(nodeIds);
+  queueIndex = preserveIndex ? previousQueueIndex : -1;
   queueSignature = nodeIds.join(",");
+}
+
+async function setQueue(params) {
+  const nodeIds = Array.isArray(params.nodeIds) ? params.nodeIds : [];
+  selectedQueue = await resolveFrameNodes(nodeIds);
+  await setNavigationQueue(nodeIds, Boolean(params && params.preserveIndex));
 
   return {
-    count: frameQueue.length,
-    frames: frameQueue.map((node, index) => summarizeFrame(node, index))
+    count: selectedQueue.length,
+    frames: selectedQueue.map((node, index) => summarizeFrame(node, index))
   };
 }
 
