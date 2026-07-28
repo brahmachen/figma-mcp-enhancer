@@ -1,5 +1,5 @@
 ---
-name: figma-enhancer
+name: fe-figma-enhancer
 description: Control the companion Figma plugin through the local figma-enhancer CLI to list queued, selected, or current-page frames and select a frame on the Figma canvas. Use when implementing multiple Figma frames, navigating a user-curated frame queue, or when the Figma MCP enhancer connection is unavailable or unreliable.
 ---
 

@@ -10,7 +10,7 @@
    figma-mcp-enhancer/plugin/manifest.json
    ```
 
-2. 打开 Figma 桌面端，在菜单中选择 `Plugins` > `Development` > `Import plugin from manifest...`。
+2. 打开 Figma 桌面端，切换到 Dev Mode，在右侧边栏选择 `Plugins` > `Development` > `Import plugin from manifest...`。
 
 3. 选择本仓库中的 `plugin/manifest.json`。
 
@@ -19,6 +19,19 @@
 5. 使用 CLI 时保持插件窗口打开，然后执行 `frames` 或 `select` 命令。命令启动临时 bridge 后，插件会自动连接并处理请求。
 
 在 Dev Mode 中，插件会出现在右侧 Inspect 面板的 Plugins 区域，而不是以普通浮动窗口显示。
+
+
+## 插件 UI 用法
+
+点击 `Find frames` 后，插件会列出当前页面所有最外层 Frame。点击列表中的 Frame 名称，会在 Figma 画布中选中该 Frame，并滚动到对应位置。
+
+勾选需要处理的 Frame 后，点击 `Use selected` 建立队列。之后可以使用插件中的 `Next`，也可以通过 CLI 的 `frames --scope queue` 读取队列。
+
+快速选择按钮：
+
+- `All`：全选当前列表。
+- `Clear`：清空当前选择。
+
 
 ## 安装 CLI
 
@@ -41,6 +54,18 @@ node cli/figma-enhancer.js --help
 ```
 
 后续示例中的 `figma-enhancer` 均可替换为 `node cli/figma-enhancer.js`。
+
+## 安装 Skill
+
+通过公司 npm 源安装 `fe-figma-enhancer` Skill：
+
+```bash
+npx --registry=https://npm.zuche.com shenzhou-zuche-skill@latest add fe-figma-enhancer
+```
+
+安装完成后，Agent 可以使用 `fe-figma-enhancer` Skill，按照相同的 CLI 工作流查找和选中 Frame。
+
+仓库内也提供了 Skill 源码，位于 `skills/figma-enhancer`。
 
 ## 快速开始
 
@@ -132,34 +157,24 @@ figma-enhancer select --previous --node-ids "123:456,123:789,123:999"
 
 建议始终向 `--next` 或 `--previous` 传入 `--node-ids`，这样每次 CLI 调用都使用明确、稳定的队列。
 
-## 插件 UI 用法
-
-点击 `Find frames` 后，插件会列出当前页面所有最外层 Frame。点击列表中的 Frame 名称，会在 Figma 画布中选中该 Frame，并滚动到对应位置。
-
-勾选需要处理的 Frame 后，点击 `Use selected` 建立队列。之后可以使用插件中的 `Next`，也可以通过 CLI 的 `frames --scope queue` 读取队列。
-
-快速选择按钮：
-
-- `All`：全选当前列表。
-- `Clear`：清空当前选择。
-
 ## 推荐工作流
+
+Figma Enhancer 与官方 Figma MCP 的职责不同：Figma Enhancer 负责批量发现、整理和切换 Frame，官方 Figma MCP 负责读取选中 Frame 的详细设计上下文、截图和素材。
 
 1. 在 Figma 中打开插件并保持窗口可见。
 2. 点击 `Find frames`，勾选待处理的 Frame，再点击 `Use selected`。
 3. 运行 `figma-enhancer frames --scope queue` 获取 Frame 列表和 node ID。
 4. 运行 `figma-enhancer select --node-id "<nodeId>"` 选中目标 Frame。
-5. 处理完成后，继续选择列表中的下一个 Frame。
+5. 调用官方 Figma MCP 的 `get_design_context`，读取当前选中 Frame 的结构、样式和素材信息。如果 MCP 客户端要求提供链接，请在 Figma 中复制当前 Frame 的精确链接。
+6. 调用官方 Figma MCP 的 `get_screenshot` 获取视觉参考；设计内容较大或返回被截断时，先调用 `get_metadata`，再按具体 node ID 获取所需节点。
+7. 使用设计上下文、截图和素材实现页面，并对照截图检查视觉和交互效果。
+8. 处理完成后，取列表中的下一个 node ID。可以通过 `figma-enhancer select --node-id "<nextNodeId>"` 或带有 `--node-ids` 的 `select --next` 切换 Figma 画布；也可以不切换当前选中项，直接调用官方 Figma MCP 的 `get_design_context(nodeId: "<nextNodeId>")` 和 `get_screenshot(nodeId: "<nextNodeId>")`。如果所用 MCP 模式还要求 `fileKey`，请同时传入对应文件的 file key，或提供包含该 node ID 的精确 Frame 链接。然后重复第 5 至 7 步。
 
 如果不需要人工整理队列，可以直接运行：
 
 ```bash
 figma-enhancer frames --scope currentPage --depth outermost
 ```
-
-## Skill 用法
-
-仓库内提供 `skills/figma-enhancer` Skill。将其链接到 Codex 的 skills 目录后，Agent 可以按照相同的 CLI 工作流查找和选中 Frame。
 
 ## 故障排查
 
