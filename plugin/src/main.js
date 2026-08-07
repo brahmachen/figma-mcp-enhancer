@@ -177,6 +177,7 @@ function findAllFrames(params) {
     return {
       scope: "queue",
       depth: "selected",
+      rootName: figma.root && figma.root.name ? figma.root.name : null,
       pageName: figma.currentPage.name,
       count: selectedQueue.length,
       frames: selectedQueue.map((node, index) => summarizeFrame(node, index))
@@ -217,6 +218,7 @@ function findAllFrames(params) {
   return {
     scope,
     depth,
+    rootName: figma.root && figma.root.name ? figma.root.name : null,
     pageName: figma.currentPage.name,
     count: nodes.length,
     frames: nodes.map((node, index) => summarizeFrame(node, index))

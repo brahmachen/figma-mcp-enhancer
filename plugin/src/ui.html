@@ -466,7 +466,9 @@
       async function poll() {
         while (true) {
           try {
-            const response = await fetch(`${bridgeUrl}/plugin/poll?clientId=${clientId}`);
+            // 上报当前项目名（rootName），bridge 可据此把命令定向派发给对应项目的插件窗口
+            const rootName = (currentContext && currentContext.rootName) ? currentContext.rootName : "";
+            const response = await fetch(`${bridgeUrl}/plugin/poll?clientId=${clientId}&rootName=${encodeURIComponent(rootName)}`);
 
             if (response.status === 204) {
               setStatus("Connected. Waiting for MCP commands...");

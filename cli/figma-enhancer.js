@@ -89,6 +89,12 @@ function runTemporaryBridge(command, params) {
           sendJson(res, 200, { ok: true, pluginConnected: delivered, mode: "cli" }); return;
         }
         if (req.method === "GET" && url.pathname === "/plugin/poll") {
+          // 与 MCP bridge 保持一致：带 project 的命令只派发给 rootName 匹配的插件窗口
+          const rootName = url.searchParams.get("rootName") || "";
+          if (params && params.project && rootName !== params.project) {
+            res.writeHead(204, { "Access-Control-Allow-Origin": "*" }); res.end();
+            return;
+          }
           if (!delivered) { delivered = true; sendJson(res, 200, { id, command, params }); }
           else { res.writeHead(204, { "Access-Control-Allow-Origin": "*" }); res.end(); }
           return;
@@ -127,9 +133,7 @@ function runTemporaryBridge(command, params) {
 function usage() {
   return [
     "figma-enhancer health",
-    "figma-enhancer frames [--scope queue|currentPage|selection] [--depth outermost|direct|recursive] [--no-sections] [--count-only]",
-    "figma-enhancer select --node-id <id>",
-    "figma-enhancer select --next|--previous [--node-ids <id,id,...>]"
+    "figma-enhancer frames [--project <项目名>] [--count-only]  (读取插件 UI 勾选的 Frame 队列；--project 指定项目名，多个项目插件同时打开时避免抢答)"
   ].join("\n");
 }
 
@@ -143,23 +147,18 @@ async function main() {
     return;
   }
   if (command === "frames") {
-    const scope = args.scope || "queue";
-    const depth = args.depth || "outermost";
-    const result = await runTemporaryBridge("findAllFrames", { scope, depth, includeSections: !args["no-sections"] });
+    // 仅保留 queue 模式：读取用户在插件 UI 勾选的 Frame 队列。
+    // CLI 只负责拿 nodeId，之后用官方 Figma MCP 按 nodeId 读取单个 Frame 的设计详情。
+    // --project <rootName> 时，bridge 只把命令派发给该项目对应的插件窗口，避免多项目插件抢答。
+    const params = { scope: "queue" };
+    if (args["project"]) params.project = args["project"];
+    const result = await runTemporaryBridge("findAllFrames", params);
     if (args["count-only"]) {
-      output({ ok: true, scope: result.scope, depth: result.depth, pageName: result.pageName, count: result.count });
+      output({ ok: true, scope: result.scope, project: result.rootName, pageName: result.pageName, count: result.count });
     } else {
       output({ ok: true, ...result });
     }
     return;
-  }
-  if (command === "select") {
-    const mode = args["node-id"] ? "nodeId" : args.previous ? "previous" : "next";
-    const params = { mode };
-    if (args["node-id"]) params.nodeId = args["node-id"];
-    if (args["node-ids"]) params.nodeIds = String(args["node-ids"]).split(",").filter(Boolean);
-    const result = await runTemporaryBridge("selectFrame", params);
-    output({ ok: true, ...result }); return;
   }
   throw new Error(`Unknown command: ${command}\n${usage()}`);
 }

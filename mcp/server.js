@@ -27,6 +27,8 @@ const emptyUiState = () => ({
 });
 let uiState = emptyUiState();
 let uiStateStore = { version: 2, states: {} };
+let projectPendingCommand = null; // 按项目定向的待派发命令 { id, command, params, project }
+let clientRegistry = {};          // clientId -> { rootName, lastSeenAt }，记录各插件窗口归属的项目
 
 let bridgeStarted = false;
 let bridgeReuse = false;
@@ -204,6 +206,26 @@ function requestPlugin(command, params) {
   });
 }
 
+// 按项目定向的请求：命令进入 projectPendingCommand，只有 rootName 匹配的插件窗口轮询时才派发，
+// 从而在多个 Figma 项目同时开着插件窗口时，也能稳定命中目标项目。
+function requestPluginProjected(project, command, params) {
+  const id = String(nextCommandId++);
+  const payload = { id, command, params: params || {} };
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      resultWaiters.delete(id);
+      if (projectPendingCommand && projectPendingCommand.id === id) {
+        projectPendingCommand = null;
+      }
+      reject(new Error(`Timed out waiting for the plugin on project "${project}". 请确认该项目的插件窗口已打开并保持可见。`));
+    }, REQUEST_TIMEOUT_MS);
+
+    resultWaiters.set(id, { resolve, reject, timeout });
+    projectPendingCommand = { id, command, params: params || {}, project };
+  });
+}
+
 const bridgeServer = http.createServer(async (req, res) => {
   try {
     if (req.method === "OPTIONS") {
@@ -216,9 +238,15 @@ const bridgeServer = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/health") {
       loadUiState();
       const scopedStates = Object.keys(uiStateStore.states);
+      const now = Date.now();
+      // 当前仍在轮询的插件窗口所在的项目列表，供 CLI 判断该用哪个 --project
+      const connectedProjects = Object.values(clientRegistry)
+        .filter((client) => now - client.lastSeenAt < 10000 && client.rootName)
+        .map((client) => client.rootName);
       sendJson(res, 200, {
         ok: true,
         pluginConnected: Date.now() - pluginLastSeenAt < 10000,
+        connectedProjects: [...new Set(connectedProjects)],
         queuedCommands: commandQueue.length,
         stateFile: STATE_FILE,
         stateScopes: scopedStates.length,
@@ -261,6 +289,20 @@ const bridgeServer = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/plugin/poll") {
       pluginLastSeenAt = Date.now();
+      // 记录该插件窗口所在的项目，用于按项目定向派发命令
+      const clientId = url.searchParams.get("clientId");
+      const rootName = url.searchParams.get("rootName") || "";
+      if (clientId) {
+        clientRegistry[clientId] = { rootName, lastSeenAt: Date.now() };
+      }
+
+      // 项目定向命令：只派发给 rootName 匹配的插件窗口
+      if (projectPendingCommand && rootName === projectPendingCommand.project) {
+        const pending = projectPendingCommand;
+        projectPendingCommand = null;
+        sendJson(res, 200, { id: pending.id, command: pending.command, params: pending.params });
+        return;
+      }
 
       const command = commandQueue.shift();
       if (command) {
@@ -311,7 +353,11 @@ const bridgeServer = http.createServer(async (req, res) => {
         sendJson(res, 400, { ok: false, error: `Unsupported bridge command: ${body.command}` });
         return;
       }
-      const result = await requestPlugin(body.command, body.params || {});
+      const params = body.params || {};
+      // 带 project 的命令按项目定向派发，只交给该项目对应的插件窗口处理
+      const result = params.project
+        ? await requestPluginProjected(params.project, body.command, params)
+        : await requestPlugin(body.command, params);
       sendJson(res, 200, { ok: true, result });
       return;
     }
@@ -504,11 +550,12 @@ rl.on("line", (line) => {
 });
 
 rl.on("close", () => {
+  // stdin 关闭（后台启动时 stdin 为 /dev/null 会立即 EOF）不应杀掉正在运行的 HTTP bridge，
+  // 否则常驻模式下服务一启动就退出。进程仍可通过 SIGINT/SIGTERM 正常停止。
   if (bridgeStarted) {
-    bridgeServer.close(() => process.exit(0));
-  } else {
-    process.exit(0);
+    return;
   }
+  process.exit(0);
 });
 
 process.on("SIGINT", () => {
