@@ -113,8 +113,20 @@ function runTemporaryBridge(command, params) {
       } catch (error) { sendJson(res, 500, { ok: false, error: error.message }); }
     });
 
+    // 跟踪已建立连接：插件 poll 循环通过 fetch 保持 keep-alive 连接，
+    // server.close() 的回调必须等所有连接断开才触发，会导致 finish() 永不返回。
+    const sockets = new Set();
+    server.on("connection", (socket) => {
+      sockets.add(socket);
+      socket.on("close", () => sockets.delete(socket));
+    });
+
     function finish(error, result) {
       clearTimeout(timeout);
+      // 主动断开插件侧 keep-alive 连接，确保 server.close() 回调立即触发，
+      // promise 正常 resolve、进程输出结果后自然退出（兼容 Node 16，无 closeAllConnections）。
+      for (const socket of sockets) { socket.destroy(); }
+      sockets.clear();
       server.close(() => error ? reject(error) : resolve(result));
     }
 
