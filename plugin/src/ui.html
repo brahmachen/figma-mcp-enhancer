@@ -533,7 +533,12 @@
           return;
         }
 
-        await postResult(message);
+        try {
+          await postResult(message);
+        } catch (_) {
+          // bridge 不可达时不阻塞手动命令结果渲染：Find frames 等操作是插件本地的，
+          // 结果应照常显示，不能因为 bridge 挂掉而表现为"点了没反应"。
+        }
         setStatus(message.ok ? "Done. Waiting for MCP commands..." : `Error: ${message.error}`);
 
         if (pendingCommand && pendingCommand.source === "manual") {
