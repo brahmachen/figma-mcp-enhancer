@@ -140,6 +140,7 @@
       <button id="find">Find frames</button>
       <button id="useSelected" class="primary" disabled>Use selected</button>
       <button id="next">Next</button>
+      <button id="copy" disabled>Copy node info</button>
     </div>
     <input id="search" class="search" type="search" placeholder="Search frames" aria-label="Search frames" />
     <div class="list-header">
@@ -160,6 +161,7 @@
       const summaryEl = document.getElementById("summary");
       const listEl = document.getElementById("list");
       const useSelectedButton = document.getElementById("useSelected");
+      const copyButton = document.getElementById("copy");
       const selectAllButton = document.getElementById("selectAll");
       const clearAllButton = document.getElementById("clearAll");
       const pending = new Map();
@@ -225,11 +227,113 @@
       function updateActions() {
         const hasFrames = frames.length > 0;
         useSelectedButton.disabled = selectedIds.size === 0;
+        copyButton.disabled = selectedIds.size === 0 && !hasFrames;
         selectAllButton.disabled = !hasFrames;
         clearAllButton.disabled = !hasFrames;
         summaryEl.textContent = hasFrames
           ? `${frames.length} frames, ${selectedIds.size} selected`
           : "No frames loaded";
+      }
+
+      // 复制目标：优先勾选的 frame，没勾选就复制当前列表里显示的全部 frame。
+      function copyTargets() {
+        if (selectedIds.size > 0) {
+          return frames.filter((frame) => selectedIds.has(frame.id));
+        }
+
+        return visibleFrames();
+      }
+
+      function figmaNodeUrl(fileKey, fileName, nodeId) {
+        if (!fileKey || !nodeId) {
+          return null;
+        }
+
+        const name = fileName ? encodeURIComponent(fileName) : "file";
+        return `https://www.figma.com/design/${fileKey}/${name}?node-id=${nodeId.replace(":", "-")}`;
+      }
+
+      // 生成给其他 AI 使用的 frame -> nodeId 对照表。
+      function buildCopyText(targets) {
+        const first = targets[0] || {};
+        const fileKey = first.fileKey || (currentContext && currentContext.fileKey) || null;
+        const fileName = (currentContext && currentContext.rootName) || null;
+        const lines = [
+          "# Figma frames",
+          "",
+          `- file: ${fileName || "unknown"}${fileKey ? ` (fileKey: ${fileKey})` : ""}`,
+          `- page: ${first.pageName || (currentContext && currentContext.pageName) || "unknown"}`,
+          `- frames: ${targets.length}`,
+          ""
+        ];
+
+        targets.forEach((frame, index) => {
+          const url = figmaNodeUrl(fileKey, fileName, frame.id);
+
+          lines.push(`## ${index + 1}. ${frame.name} (${frame.type})`);
+          lines.push(`- nodeId: ${frame.id}`);
+
+          if (frame.width != null) {
+            lines.push(`- size: ${frame.width}x${frame.height}`);
+          }
+
+          if (url) {
+            lines.push(`- url: ${url}`);
+          }
+
+          lines.push("");
+        });
+
+        return `${lines.join("\n").trimEnd()}\n`;
+      }
+
+      // Figma 插件 UI 跑在 iframe 里，navigator.clipboard 不保证可用，
+      // 因此失败时回退到 textarea + execCommand 的复制方式。
+      async function writeClipboard(text) {
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(text);
+            return true;
+          }
+        } catch (_) {}
+
+        try {
+          const textarea = document.createElement("textarea");
+          textarea.value = text;
+          textarea.setAttribute("readonly", "readonly");
+          textarea.style.position = "fixed";
+          textarea.style.top = "-1000px";
+          textarea.style.opacity = "0";
+          document.body.appendChild(textarea);
+          textarea.select();
+          textarea.setSelectionRange(0, textarea.value.length);
+          const copied = document.execCommand("copy");
+          document.body.removeChild(textarea);
+          return copied;
+        } catch (_) {
+          return false;
+        }
+      }
+
+      async function copyNodeInfo() {
+        const targets = copyTargets();
+
+        if (targets.length === 0) {
+          setStatus("Load frames before copying.");
+          return;
+        }
+
+        try {
+          const copied = await writeClipboard(buildCopyText(targets));
+
+          setStatus(
+            copied
+              ? `Copied ${targets.length} frame(s) with nodeId.`
+              : "Copy failed. Click the plugin window and try again."
+          );
+        } catch (error) {
+          setStatus(`Copy failed: ${error.message}`);
+        }
       }
 
       function visibleFrames() {
@@ -556,6 +660,10 @@
 
       useSelectedButton.onclick = () => {
         syncSelectedQueue();
+      };
+
+      copyButton.onclick = () => {
+        copyNodeInfo();
       };
 
       document.getElementById("next").onclick = () => {
