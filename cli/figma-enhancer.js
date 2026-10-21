@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const http = require("http");
+const fs = require("fs");
 const { URL } = require("url");
 
 const PORT = Number(process.env.FIGMA_ENHANCER_PORT || 8787);
@@ -145,7 +146,8 @@ function runTemporaryBridge(command, params) {
 function usage() {
   return [
     "figma-enhancer health",
-    "figma-enhancer frames [--project <项目名>] [--count-only]  (读取插件 UI 勾选的 Frame 队列；--project 指定项目名，多个项目插件同时打开时避免抢答)"
+    "figma-enhancer frames [--project <项目名>] [--count-only]  (读取插件 UI 勾选的 Frame 队列；--project 指定项目名，多个项目插件同时打开时避免抢答)",
+    "figma-enhancer export --node-id <id> --out <file> [--scale 2] [--format PNG|JPG] [--hide-node <名称关键字>] [--project <项目名>]  (按倍率导出 Frame 图片，可按图层名隐藏状态栏等)"
   ].join("\n");
 }
 
@@ -170,6 +172,25 @@ async function main() {
     } else {
       output({ ok: true, ...result });
     }
+    return;
+  }
+  if (command === "export") {
+    const nodeId = args["node-id"] || args.nodeId;
+    const out = args.out;
+    if (!nodeId || !out) {
+      throw new Error("Usage: figma-enhancer export --node-id <id> --out <file> [--scale 2] [--format PNG|JPG] [--project <项目名>]");
+    }
+    const params = {
+      nodeId,
+      scale: args.scale || 2,
+      format: args.format || "PNG"
+    };
+    if (args["hide-node"]) params.hideNodeText = args["hide-node"];
+    if (args["project"]) params.project = args["project"];
+    const result = await runTemporaryBridge("exportFrame", params);
+    fs.writeFileSync(out, Buffer.from(result.base64, "base64"));
+    const { base64: _base64, ...meta } = result;
+    output({ ok: true, ...meta, out });
     return;
   }
   throw new Error(`Unknown command: ${command}\n${usage()}`);

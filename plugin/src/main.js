@@ -330,6 +330,70 @@ async function setQueue(params) {
   };
 }
 
+/**
+ * 按指定倍率导出节点图片。
+ *
+ * MCP 的 get_screenshot 会把长图压到 1024px 以内，静态长页需要走
+ * Figma Plugin API 的 exportAsync 拿原尺寸/2x/3x 图。
+ *
+ * hideNodeText 支持逗号分隔的图层名关键字（如「状态栏」）：
+ * 导出前临时隐藏匹配到的图层（含实例），导出后恢复，避免把设计稿里的
+ * iOS/Android 状态栏一起导进静态长图。
+ */
+async function exportFrame(params) {
+  const nodeId = params && params.nodeId;
+  if (!nodeId) {
+    throw new Error("nodeId is required");
+  }
+
+  const node = await getNodeById(nodeId);
+  if (!node) {
+    throw new Error(`Node not found: ${nodeId}`);
+  }
+
+  const scale = Number(params.scale) > 0 ? Number(params.scale) : 2;
+  const format = params.format === "JPG" ? "JPG" : "PNG";
+  const hideTexts = String(params.hideNodeText || "")
+    .split(",")
+    .map((text) => text.trim())
+    .filter(Boolean);
+  const hiddenNodes = [];
+
+  if (hideTexts.length > 0) {
+    const matches = node.findAll((child) =>
+      hideTexts.some((text) => child.name.includes(text))
+    );
+    for (const child of matches) {
+      if (child.visible) {
+        hiddenNodes.push(child);
+        child.visible = false;
+      }
+    }
+  }
+
+  try {
+    const bytes = await node.exportAsync({
+      format,
+      constraint: { type: "SCALE", value: scale }
+    });
+
+    return {
+      nodeId,
+      name: node.name,
+      width: Math.round(node.width * scale),
+      height: Math.round(node.height * scale),
+      scale,
+      format,
+      hiddenNodeCount: hiddenNodes.length,
+      base64: figma.base64Encode(bytes)
+    };
+  } finally {
+    for (const child of hiddenNodes) {
+      child.visible = true;
+    }
+  }
+}
+
 figma.ui.onmessage = async (message) => {
   if (!message || message.type !== "bridge-command") {
     return;
@@ -346,6 +410,8 @@ figma.ui.onmessage = async (message) => {
       result = await selectFrame(message.params || {});
     } else if (message.command === "setQueue") {
       result = await setQueue(message.params || {});
+    } else if (message.command === "exportFrame") {
+      result = await exportFrame(message.params || {});
     } else {
       throw new Error(`Unknown command: ${message.command}`);
     }

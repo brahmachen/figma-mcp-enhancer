@@ -349,7 +349,8 @@ const bridgeServer = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/mcp/call") {
       const body = await readJsonBody(req);
-      if (body.command !== "findAllFrames" && body.command !== "selectFrame") {
+      const supportedCommands = ["findAllFrames", "selectFrame", "exportFrame"];
+      if (!supportedCommands.includes(body.command)) {
         sendJson(res, 400, { ok: false, error: `Unsupported bridge command: ${body.command}` });
         return;
       }
