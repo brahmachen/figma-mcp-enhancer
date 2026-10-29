@@ -147,7 +147,8 @@ function usage() {
   return [
     "figma-enhancer health",
     "figma-enhancer frames [--project <项目名>] [--count-only]  (读取插件 UI 勾选的 Frame 队列；--project 指定项目名，多个项目插件同时打开时避免抢答)",
-    "figma-enhancer export --node-id <id> --out <file> [--scale 2] [--format PNG|JPG] [--hide-node <名称关键字>] [--project <项目名>]  (按倍率导出 Frame 图片，可按图层名隐藏状态栏等)"
+    "figma-enhancer nodes [--name <关键字>] [--text <文案>] [--type TEXT,GROUP] [--scope currentPage|selection] [--depth direct|recursive] [--limit 200] [--visible-only] [--project <项目名>]  (查找任意类型节点的 id，文本图层会附带字体信息)",
+    "figma-enhancer export --node-id <id> --out <file> [--scale 2] [--format PNG|JPG] [--hide-node <名称关键字>] [--project <项目名>]  (按倍率导出任意节点图片，PNG 保留透明背景)"
   ].join("\n");
 }
 
@@ -172,6 +173,24 @@ async function main() {
     } else {
       output({ ok: true, ...result });
     }
+    return;
+  }
+  if (command === "nodes") {
+    // 任意类型节点查找：文本 / 编组 / 矢量图层都能拿到 nodeId，
+    // 之后用 export --node-id 导出，用于「字体不能直接引用」的图层。
+    const params = {};
+
+    if (args["name"]) params.name = String(args["name"]);
+    if (args["text"]) params.text = String(args["text"]);
+    if (args["type"]) params.types = String(args["type"]);
+    if (args["scope"]) params.scope = String(args["scope"]);
+    if (args["depth"]) params.depth = String(args["depth"]);
+    if (args["limit"]) params.limit = Number(args["limit"]);
+    if (args["visible-only"]) params.visibleOnly = true;
+    if (args["project"]) params.project = String(args["project"]);
+
+    const result = await runTemporaryBridge("findNodes", params);
+    output({ ok: true, ...result });
     return;
   }
   if (command === "export") {

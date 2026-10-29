@@ -114,6 +114,175 @@ function getContext() {
   };
 }
 
+const NODE_SEARCH_LIMIT = 200;
+const TEXT_PREVIEW_LENGTH = 120;
+
+function normalizeNodeTypes(params) {
+  const raw = params && params.types;
+
+  if (Array.isArray(raw)) {
+    return raw.map((item) => String(item).trim().toUpperCase()).filter(Boolean);
+  }
+
+  return String(raw || "")
+    .split(",")
+    .map((item) => item.trim().toUpperCase())
+    .filter(Boolean);
+}
+
+/**
+ * 文本图层信息。
+ *
+ * 设计稿里部分文案用的是无法直接引用的商用字体，只能把该 TEXT 图层导出成图片；
+ * 这里把文案、字体、字号一起返回，用来判断应该导出哪个图层。
+ */
+function textInfo(node) {
+  if (node.type !== "TEXT") {
+    return null;
+  }
+
+  const characters = String(node.characters || "");
+  const fontName = node.fontName;
+  const fontSize = node.fontSize;
+
+  return {
+    characters:
+      characters.length > TEXT_PREVIEW_LENGTH
+        ? `${characters.slice(0, TEXT_PREVIEW_LENGTH)}…`
+        : characters,
+    fontName:
+      fontName && fontName !== figma.mixed
+        ? { family: fontName.family, style: fontName.style }
+        : null,
+    fontSize: fontSize === figma.mixed ? null : fontSize
+  };
+}
+
+function absoluteBounds(node) {
+  const box = node.absoluteBoundingBox;
+
+  if (!box) {
+    return null;
+  }
+
+  return {
+    x: Math.round(box.x),
+    y: Math.round(box.y),
+    width: Math.round(box.width),
+    height: Math.round(box.height)
+  };
+}
+
+function summarizeNode(node, index) {
+  const bounds = hasBounds(node)
+    ? {
+        x: Math.round(node.x),
+        y: Math.round(node.y),
+        width: Math.round(node.width),
+        height: Math.round(node.height)
+      }
+    : {};
+  const parent = node.parent;
+
+  return {
+    index,
+    id: node.id,
+    name: node.name,
+    type: node.type,
+    pageId: figma.currentPage.id,
+    pageName: figma.currentPage.name,
+    parentId: parent && parent.type !== "DOCUMENT" ? parent.id : null,
+    parentName: parent && parent.type !== "DOCUMENT" ? parent.name : null,
+    path: getNodePath(node),
+    ...bounds,
+    absolute: absoluteBounds(node),
+    childCount: hasChildren(node) ? node.children.length : 0,
+    visible: node.visible !== false,
+    text: textInfo(node),
+    description: `${node.name} | ${node.type} | ${bounds.width || 0}x${bounds.height || 0}`
+  };
+}
+
+function matchesNode(node, params) {
+  const types = normalizeNodeTypes(params);
+
+  if (types.length > 0 && !types.includes(node.type)) {
+    return false;
+  }
+
+  const name = String((params && params.name) || "").toLowerCase();
+  if (name && !node.name.toLowerCase().includes(name)) {
+    return false;
+  }
+
+  const text = String((params && params.text) || "");
+  if (text && (node.type !== "TEXT" || !String(node.characters || "").includes(text))) {
+    return false;
+  }
+
+  if (params && params.visibleOnly === true && node.visible === false) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * 按条件查找任意类型的节点，不限于 Frame。
+ *
+ * findAllFrames 只认 FRAME/COMPONENT/INSTANCE/SECTION，文本、编组、矢量图层都
+ * 拿不到 id；而 exportFrame 本身接受任意 nodeId。这里补齐「先找到 id」这一步，
+ * 用于导出品牌文案这类只能以图片还原的图层。
+ */
+function findNodes(params) {
+  const scope = params && params.scope === "selection" ? "selection" : "currentPage";
+  const roots = scope === "selection" ? figma.currentPage.selection : [figma.currentPage];
+  const depth = params && params.depth === "direct" ? "direct" : "recursive";
+  const requestedLimit = Number(params && params.limit);
+  const limit =
+    requestedLimit > 0 ? Math.min(Math.round(requestedLimit), 1000) : NODE_SEARCH_LIMIT;
+  const nodes = [];
+  let matched = 0;
+
+  for (const root of roots) {
+    if (!hasChildren(root)) {
+      continue;
+    }
+
+    const candidates =
+      depth === "direct"
+        ? root.children.filter((node) => matchesNode(node, params))
+        : root.findAll((node) => matchesNode(node, params));
+
+    matched += candidates.length;
+
+    for (const node of candidates) {
+      if (nodes.length < limit) {
+        nodes.push(node);
+      }
+    }
+  }
+
+  nodes.sort((a, b) => {
+    const aBox = a.absoluteBoundingBox || { x: 0, y: 0 };
+    const bBox = b.absoluteBoundingBox || { x: 0, y: 0 };
+
+    if (aBox.y !== bBox.y) return aBox.y - bBox.y;
+    return aBox.x - bBox.x;
+  });
+
+  return {
+    scope,
+    depth,
+    rootName: figma.root && figma.root.name ? figma.root.name : null,
+    pageName: figma.currentPage.name,
+    count: nodes.length,
+    matched,
+    truncated: matched > nodes.length,
+    nodes: nodes.map((node, index) => summarizeNode(node, index))
+  };
+}
+
 function resetQueue() {
   selectedQueue = [];
   navigationQueue = [];
@@ -336,6 +505,10 @@ async function setQueue(params) {
  * MCP 的 get_screenshot 会把长图压到 1024px 以内，静态长页需要走
  * Figma Plugin API 的 exportAsync 拿原尺寸/2x/3x 图。
  *
+ * nodeId 可以是任意节点（Frame、编组、文本、矢量图层），配合 findNodes
+ * 就能把设计稿里的品牌文案等「不能直接用字体还原」的图层导成图片。
+ * PNG 默认保留透明背景，叠加到页面底图上不会出现矩形接缝。
+ *
  * hideNodeText 支持逗号分隔的图层名关键字（如「状态栏」）：
  * 导出前临时隐藏匹配到的图层（含实例），导出后恢复，避免把设计稿里的
  * iOS/Android 状态栏一起导进静态长图。
@@ -406,6 +579,8 @@ figma.ui.onmessage = async (message) => {
       result = getContext();
     } else if (message.command === "findAllFrames") {
       result = findAllFrames(message.params || {});
+    } else if (message.command === "findNodes") {
+      result = findNodes(message.params || {});
     } else if (message.command === "selectFrame") {
       result = await selectFrame(message.params || {});
     } else if (message.command === "setQueue") {

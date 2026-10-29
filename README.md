@@ -76,10 +76,13 @@ npx --registry=https://npm.zuche.com shenzhou-zuche-skill@latest add fe-figma-en
 figma-enhancer health
 
 # 读取插件 UI 中已勾选的 Frame
-figma-enhancer frames --scope queue
+figma-enhancer frames --project '探车商家端后台管理系统'
 
-# 选中指定 Frame
-figma-enhancer select --node-id "123:456"
+# 查找任意类型节点的 id（不限于 Frame）
+figma-enhancer nodes --name "探车二手车平台" --type TEXT
+
+# 把节点导出成图片
+figma-enhancer export --node-id "123:456" --out /tmp/layer@2x.png --scale 2
 ```
 
 CLI 会在执行 `frames` 或 `select` 命令时临时启动本地 bridge，并在命令结束后退出。因此，没有命令运行时 `health` 返回 `bridgeRunning: false` 是正常现象。
@@ -138,24 +141,42 @@ figma-enhancer frames --scope selection --depth recursive --no-sections
 figma-enhancer frames --scope currentPage --count-only
 ```
 
-Frame 结果包含 `id`、`name`、尺寸、布局信息和部分文本摘要。其中 `id` 可直接传给 `select --node-id`。
+Frame 结果包含 `id`、`name`、尺寸、布局信息和部分文本摘要。其中 `id` 可直接传给 `export --node-id`。
 
-### 选中 Frame
+### 查找任意节点
 
-按 node ID 选中：
-
-```bash
-figma-enhancer select --node-id "123:456"
-```
-
-在指定队列中选择下一个或上一个 Frame：
+`frames` 只返回 Frame / Component / Instance / Section。文本、编组、矢量图层用 `nodes` 查找，返回结果里的 `id` 才是导出时需要的：
 
 ```bash
-figma-enhancer select --next --node-ids "123:456,123:789,123:999"
-figma-enhancer select --previous --node-ids "123:456,123:789,123:999"
+figma-enhancer nodes [--name <关键字>] [--text <文案>] [--type TEXT,GROUP] [--scope currentPage|selection] [--depth direct|recursive] [--limit 200] [--visible-only] [--project <项目名>]
 ```
 
-建议始终向 `--next` 或 `--previous` 传入 `--node-ids`，这样每次 CLI 调用都使用明确、稳定的队列。
+- `--name`：图层名包含该关键字（不区分大小写）。
+- `--text`：文本图层内容包含该文案。
+- `--type`：逗号分隔的节点类型，默认不限类型。
+- `--scope`：`currentPage` 扫整页，`selection` 只扫当前选区。
+- `--depth`：`recursive` 递归（默认），`direct` 只看直接子节点。
+- `--limit`：最多返回多少条，默认 200，上限 1000；超出时 `truncated` 为 `true`。
+
+结果里除 `id`、`name`、`type`、`absolute` 尺寸外，文本图层还会带 `text.characters`、`text.fontName`、`text.fontSize`，方便判断该导出哪个图层。
+
+```bash
+# 找品牌文案所在的文本图层
+figma-enhancer nodes --name "探车二手车平台" --type TEXT --project '探车商家端后台管理系统'
+```
+
+### 导出节点图片
+
+```bash
+figma-enhancer export --node-id <id> --out <file> [--scale 2] [--format PNG|JPG] [--hide-node <名称关键字>] [--project <项目名>]
+```
+
+`--node-id` 可以是任意节点，不限于 Frame。`--scale` 默认 2，PNG 保留透明背景，导出的文本图层可以直接叠在页面底图上，不会出现矩形接缝。
+
+```bash
+# 设计稿字体无法直接引用时，把文案图层导成 2x 图片
+figma-enhancer export --node-id "123:456" --out src/assets/brand-copy@2x.png --scale 2
+```
 
 ## 推荐工作流
 
@@ -163,18 +184,15 @@ Figma Enhancer 与官方 Figma MCP 的职责不同：Figma Enhancer 负责批量
 
 1. 在 Figma 中打开插件并保持窗口可见。
 2. 点击 `Find frames`，勾选待处理的 Frame，再点击 `Use selected`。
-3. 运行 `figma-enhancer frames --scope queue` 获取 Frame 列表和 node ID。
-4. 运行 `figma-enhancer select --node-id "<nodeId>"` 选中目标 Frame。
-5. 调用官方 Figma MCP 的 `get_design_context`，读取当前选中 Frame 的结构、样式和素材信息。如果 MCP 客户端要求提供链接，请在 Figma 中复制当前 Frame 的精确链接。
-6. 调用官方 Figma MCP 的 `get_screenshot` 获取视觉参考；设计内容较大或返回被截断时，先调用 `get_metadata`，再按具体 node ID 获取所需节点。
+3. 运行 `figma-enhancer frames --project '<项目名>'` 获取 Frame 列表和 node ID。
+4. 把 node ID 直接交给官方 Figma MCP 的 `get_design_context(nodeId)` 和 `get_screenshot(nodeId)`，不需要先切换 Figma 画布。
+5. 读取结构、样式和素材信息。如果 MCP 客户端要求提供链接，请在 Figma 中复制当前 Frame 的精确链接。
+6. 设计内容较大或返回被截断时，先调用 `get_metadata`，再按具体 node ID 获取所需节点。
 7. 使用设计上下文、截图和素材实现页面，并对照截图检查视觉和交互效果。
-8. 处理完成后，取列表中的下一个 node ID。可以通过 `figma-enhancer select --node-id "<nextNodeId>"` 或带有 `--node-ids` 的 `select --next` 切换 Figma 画布；也可以不切换当前选中项，直接调用官方 Figma MCP 的 `get_design_context(nodeId: "<nextNodeId>")` 和 `get_screenshot(nodeId: "<nextNodeId>")`。如果所用 MCP 模式还要求 `fileKey`，请同时传入对应文件的 file key，或提供包含该 node ID 的精确 Frame 链接。然后重复第 5 至 7 步。
+8. 图层需要以图片还原（例如设计稿字体无法直接引用）时，用 `figma-enhancer nodes` 找到图层 id，再用 `figma-enhancer export` 导出，然后把图片接入页面。
+9. 处理完成后取列表中的下一个 node ID，重复第 4 至 8 步。
 
-如果不需要人工整理队列，可以直接运行：
-
-```bash
-figma-enhancer frames --scope currentPage --depth outermost
-```
+如果不需要人工整理队列，可以先定位到目标页面，再用 `figma-enhancer nodes --name '<关键字>'` 直接按名称找图层。
 
 ## 故障排查
 

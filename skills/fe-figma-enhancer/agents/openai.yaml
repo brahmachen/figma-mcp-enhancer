@@ -1,4 +1,4 @@
 interface:
-  display_name: "Fe Figma Enhancer"
-  short_description: "List and select Figma frames through the local CLI"
-  default_prompt: "Use $fe-figma-enhancer to inspect the queued Figma frames and select the next design frame."
+  display_name: "Figma Frame 批处理"
+  short_description: "读取 Frame 队列、查找任意节点并导出图层图片"
+  default_prompt: "使用 $fe-figma-enhancer 查询 Figma Frame 队列，并按 nodeId 读取设计详情或导出图层图片。"

@@ -349,7 +349,7 @@ const bridgeServer = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/mcp/call") {
       const body = await readJsonBody(req);
-      const supportedCommands = ["findAllFrames", "selectFrame", "exportFrame"];
+      const supportedCommands = ["findAllFrames", "findNodes", "selectFrame", "exportFrame"];
       if (!supportedCommands.includes(body.command)) {
         sendJson(res, 400, { ok: false, error: `Unsupported bridge command: ${body.command}` });
         return;
@@ -416,6 +416,49 @@ function toolDefinitions() {
       }
     },
     {
+      name: "figma_find_nodes",
+      description: "Find nodes of any type (TEXT, GROUP, VECTOR, FRAME...) by name or text content. Use it when the target layer is not a frame — for example a brand headline that has to be exported as an image because its font cannot be used in code. Text nodes include fontName and fontSize.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          name: {
+            type: "string",
+            description: "Substring of the layer name, case-insensitive."
+          },
+          text: {
+            type: "string",
+            description: "Substring of the characters inside TEXT nodes."
+          },
+          types: {
+            type: "string",
+            description: "Comma separated node types to keep, e.g. \"TEXT,GROUP\". Empty means all types."
+          },
+          scope: {
+            type: "string",
+            enum: ["currentPage", "selection"],
+            default: "currentPage",
+            description: "Search the whole current page or only the current selection."
+          },
+          depth: {
+            type: "string",
+            enum: ["direct", "recursive"],
+            default: "recursive",
+            description: "Search direct children only, or every nested node."
+          },
+          limit: {
+            type: "number",
+            default: 200,
+            description: "Maximum number of nodes returned (capped at 1000)."
+          },
+          visibleOnly: {
+            type: "boolean",
+            default: false,
+            description: "Skip hidden layers."
+          }
+        }
+      }
+    },
+    {
       name: "figma_select_frame",
       description: "Select a Figma frame by nodeId, or select the next/previous frame from the last figma_find_all_frames result.",
       inputSchema: {
@@ -449,6 +492,20 @@ async function callTool(name, args) {
     const result = await shouldUseSharedBridge()
       ? (await postBridgeJson("/mcp/call", { command: "findAllFrames", params: args || {} })).result
       : await requestPlugin("findAllFrames", args || {});
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(result, null, 2)
+        }
+      ]
+    };
+  }
+
+  if (name === "figma_find_nodes") {
+    const result = await shouldUseSharedBridge()
+      ? (await postBridgeJson("/mcp/call", { command: "findNodes", params: args || {} })).result
+      : await requestPlugin("findNodes", args || {});
     return {
       content: [
         {
